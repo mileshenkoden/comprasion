@@ -153,3 +153,4 @@ if os.path.exists(BLOCKED_SITES_FILE) and os.path.exists(OUR_SITES_FILE):
         json.dump(common_words, file, indent=4, ensure_ascii=False)
 
     print("Результат збережено у result.json")
+
