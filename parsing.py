@@ -10,6 +10,8 @@ from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # Налаштування
+TOKEN = "@Alert_To_Blocked_Site_bot"
+CHAT_ID = "685062387"
 CHROMEDRIVER_PATH = "/home/den/PycharmProjects/comparison/Driver/chromedriver"
 DATA_FILE = "link/all_orders.json"
 PROCESSED_FILE = "link/processed_links.json"
@@ -153,4 +155,18 @@ if os.path.exists(BLOCKED_SITES_FILE) and os.path.exists(OUR_SITES_FILE):
         json.dump(common_words, file, indent=4, ensure_ascii=False)
 
     print("Результат збережено у result.json")
+with open(RESULT_FILE, "r", encoding="utf-8") as file:
+    list_block = json.load(file)
 
+MESSAGE = "\n".join(list_block) if list_block else "Результатів не знайдено."
+
+
+url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+params = {"chat_id": CHAT_ID, "text": MESSAGE}
+
+response = requests.get(url, params=params)
+
+if response.status_code == 200:
+    print("✅ Повідомлення надіслано!")
+else:
+    print("❌ Помилка:", response.text)
