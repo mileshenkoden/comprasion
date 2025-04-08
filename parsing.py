@@ -3,31 +3,45 @@ import json
 import time
 import random
 import requests
+import urllib3
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import NoSuchElementException, ElementClickInterceptedException
+from telegram_alert import send_telegram_alert
+def find_common_words(json_file1, json_file2):
+    # Зчитуємо файли JSON
+    with open(json_file1, 'r', encoding='utf-8') as f1, open(json_file2, 'r', encoding='utf-8') as f2:
+        list1 = json.load(f1)
+        list2 = json.load(f2)
 
-# Налаштування
-TOKEN = "@Alert_To_Blocked_Site_bot"
+    # Використовуємо множини для швидкого порівняння
+    common_words = list(set(list1) & set(list2))
+    with open("result.json", "w") as file:
+        json.dump(common_words, file, ensure_ascii=False, indent=4)
+
+TOKEN = "7692114474:AAGkZlNJoVqabWI6Xe1K6JwMmplyMNE1gaQ"
 CHAT_ID = "685062387"
-CHROMEDRIVER_PATH = "/home/den/PycharmProjects/comparison/Driver/chromedriver"
-DATA_FILE = "link/all_orders.json"
-PROCESSED_FILE = "link/processed_links.json"
-ALL_TEXTS_FILE = "all_texts.txt"
-BLOCKED_SITES_FILE = "blocked_sait.json"
-OUR_SITES_FILE = "our_sites.json"
-RESULT_FILE = "result.json"
 
+
+# Шлях до драйвера Chrome
+CHROMEDRIVER_PATH = "/home/den/PycharmProjects/comparison/Driver/chromedriver"
+
+# Файл для збереження результатів
+DATA_FILE = "link/all_orders.json"
+
+# Папка для завантаження файлів
 DOWNLOAD_FOLDER = os.path.abspath("downloads")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
+# Налаштування браузера для автоматичного завантаження файлів
 options = Options()
-options.add_argument("--headless")
-options.add_argument("--disable-blink-features=AutomationControlled")
-options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/133.0.0.0")
+options.add_argument("--headless")  # Запуск без інтерфейсу
+options.add_argument("--disable-blink-features=AutomationControlled")  # Приховуємо автоматизацію
+options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
 
+# Вказуємо папку для завантаження файлів
 prefs = {
     "download.default_directory": DOWNLOAD_FOLDER,
     "download.prompt_for_download": False,
@@ -36,8 +50,16 @@ prefs = {
 }
 options.add_experimental_option("prefs", prefs)
 
+# Запуск ChromeDriver
 service = Service(CHROMEDRIVER_PATH)
 driver = webdriver.Chrome(service=service, options=options)
+
+# Відкриваємо сторінку
+url = "https://cip.gov.ua/ua/filter?tagId=60751"
+driver.get(url)
+
+# Очікування для завантаження контенту
+time.sleep(5)
 
 # Завантажуємо вже збережені посилання
 if os.path.exists(DATA_FILE):
@@ -46,127 +68,172 @@ if os.path.exists(DATA_FILE):
 else:
     all_a_order = {}
 
+PROCESSED_FILE = "link/processed_links.json"
+
 if os.path.exists(PROCESSED_FILE):
     with open(PROCESSED_FILE, "r", encoding="utf-8") as file:
         processed_links = set(json.load(file))
 else:
     processed_links = set()
 
-MAX_RETRIES = 3
-RETRY_DELAY = 10
+try:
+    next_button = driver.find_element(By.XPATH, "//a[@aria-label='Next']")
 
-# Перебір збережених посилань
+    # Прокручуємо до кнопки
+    driver.execute_script("arguments[0].scrollIntoView(true);", next_button)
+    time.sleep(1)  # невелика затримка
+
+    # Пробуємо натиснути через JavaScript
+    driver.execute_script("arguments[0].click();", next_button)
+    print("Перехід на першу сторінку...")
+    time.sleep(random.randint(5, 10))
+
+except Exception as e:
+    print("⚠️ Не вдалося натиснути 'Next' або сталася помилка:", e.__class__.__name__)
+    print("Пропускаємо перехід.")
+
+while True:
+    # Отримуємо всі посилання
+    orders = driver.find_elements(By.XPATH, "//div[@class='px-3 pt-3 border-top ng-star-inserted']/a")
+
+    new_links = 0
+
+    for order in orders:
+        href_a = order.get_attribute("href")
+        if not href_a.startswith("http"):
+            href_a = "https://cip.gov.ua" + href_a
+
+        name_a = order.text.strip()
+
+        # Перевіряємо, чи вже є у файлі
+        if name_a not in all_a_order:
+            all_a_order[name_a] = href_a
+            new_links += 1
+
+    # Якщо є нові посилання, зберігаємо у файл
+    if new_links > 0:
+        os.makedirs("link", exist_ok=True)
+        with open(DATA_FILE, "w", encoding="utf-8") as file:
+            json.dump(all_a_order, file, indent=4, ensure_ascii=False)
+
+        print(f"Додано {new_links} нових посилань у {DATA_FILE}!")
+
+    else:
+        print("Немає нових посилань, пропускаємо збереження.")
+
+    # Переходимо на наступну сторінку
+    try:
+        next_button = driver.find_element(By.XPATH, "//a[@aria-label='Next']")
+        if "disabled" in next_button.get_attribute("class"):
+            print("Досягнуто останньої сторінки!")
+            break
+
+        next_button.click()
+        print("Перехід на наступну сторінку...")
+        time.sleep(random.randint(5, 10))
+
+    except Exception as e:
+        print("Не вдалося знайти кнопку 'Next' або сталася помилка:", e)
+        break
+
+# Завантаження тільки .txt файлів
+# Завантаження тільки .txt файлів
+MAX_RETRIES = 3  # Максимальна кількість повторних спроб
+RETRY_DELAY = 10  # Затримка між спробами (у секундах)
+
 for count, (link_name, link_href) in enumerate(all_a_order.items(), start=1):
     print(f"[{count}/{len(all_a_order)}] Перехід на сторінку: {link_href}")
 
+    # Пропускаємо, якщо посилання вже оброблено
     if link_href in processed_links:
-        print(f"Пропущено (вже оброблено): {link_href}")
+        print(f"[{count}/{len(all_a_order)}] Пропущено (вже оброблено): {link_href}")
         continue
 
-    retries = 0
+    retries = 0  # Лічильник спроб
     while retries < MAX_RETRIES:
         try:
-            if not link_href.startswith("http"):
-                print(f"Помилка у посиланні: {link_href}")
-                retries += 1
-                continue
-
-            try:
-                response = requests.get(link_href, timeout=5)
-                if response.status_code != 200:
-                    print(f"Недоступний сайт: {link_href} (код {response.status_code})")
-                    retries += 1
-                    continue
-            except requests.RequestException as e:
-                print(f"Помилка підключення до {link_href}: {e}")
-                retries += 1
-                continue
-
             driver.get(link_href)
-            driver.set_page_load_timeout(300)
-            time.sleep(random.randint(10, 15))
-            break  # Вихід з циклу при успішному відкритті сторінки
-
-        except TimeoutException:
+            driver.set_page_load_timeout(300)  # 5 хвилин
+            time.sleep(random.randint(10, 15))  # Очікування для завантаження
+            break  # Якщо сторінка завантажилася успішно, виходимо з циклу
+        except (TimeoutError, urllib3.exceptions.ReadTimeoutError) as e:
             retries += 1
-            print(f"Помилка тайм-ауту при переході на {link_href} (спроба {retries}/{MAX_RETRIES})")
+            print(f"Помилка тайм-ауту при переході на {link_href} (спроба {retries}/{MAX_RETRIES}): {e}")
             if retries < MAX_RETRIES:
                 print(f"Повторна спроба через {RETRY_DELAY} секунд...")
                 time.sleep(RETRY_DELAY)
             else:
-                print(f"Пропущено після {MAX_RETRIES} спроб: {link_href}")
-                processed_links.add(link_href)
-                continue
+                print(f"Не вдалося завантажити {link_href} після {MAX_RETRIES} спроб. Пропускаємо.")
+                processed_links.add(link_href)  # Позначаємо як оброблене, щоб не застрягнути
+                break
+
+
+    driver.get(link_href)
+    driver.set_page_load_timeout(300)  # 5 хвилин
+
+    time.sleep(random.randint(10, 15))
 
     try:
-        download_button = driver.find_element(By.XPATH, "//a[contains(@class, 'btn-light') and contains(@download, '.txt')]")
+        # Шукаємо кнопку завантаження TXT-файлу
+        download_button = driver.find_element(By.XPATH,
+                                              "//a[contains(@class, 'btn-light') and contains(@download, '.txt')]")
+
+        # Отримуємо посилання на файл
         file_url = download_button.get_attribute("href")
         file_name = download_button.get_attribute("download")
 
-        if not file_url or not file_name.endswith(".txt"):
-            raise ValueError("Некоректне посилання або ім'я файлу.")
+        file_path = os.path.join(DOWNLOAD_FOLDER, file_name)  # ДОДАНО: Повний шлях до файлу
 
-        file_path = os.path.join(DOWNLOAD_FOLDER, file_name)
-
+        # ДОДАНО: Перевіряємо, чи файл вже існує
         if os.path.exists(file_path):
-            print(f"Файл {file_name} вже існує, пропускаємо.")
-        else:
+            print(f"Файл {file_name} вже існує, пропускаємо завантаження.")
+            processed_links.add(link_href)  # Все одно додаємо в список оброблених
+            continue  # Пропускаємо завантаження
+
+        if file_url and file_name.endswith(".txt"):
             print(f"Завантаження: {file_name} ({file_url})")
+
+
+            driver.get(file_url)  # Відкриваємо посилання (файл автоматично збережеться)
+
+            # Додаємо посилання в список оброблених після завантаження
+            processed_links.add(link_href)
+
+            # Зберігаємо оновлений список оброблених посилань
+            with open(PROCESSED_FILE, "w", encoding="utf-8") as file:
+                json.dump(list(processed_links), file, indent=4, ensure_ascii=False)
+
+        if file_url and file_name.endswith(".txt"):
+            print(f"Завантаження: {file_name} ({file_url})")
+
             driver.get(file_url)
 
-        processed_links.add(link_href)
+            processed_links.add(link_href)
+            with open(PROCESSED_FILE, "w", encoding="utf-8") as file:
+                json.dump(list(processed_links), file, indent=4, ensure_ascii=False)
 
-        with open(PROCESSED_FILE, "w", encoding="utf-8") as file:
-            json.dump(list(processed_links), file, indent=4, ensure_ascii=False)
+            time.sleep(random.randint(10, 15))
 
-        time.sleep(random.randint(10, 15))
 
-    except NoSuchElementException:
-        print(f"Кнопку завантаження TXT не знайдено на {link_href}.")
+
+
+
     except Exception as e:
-        print(f"Помилка при обробці {link_href}: {e}")
+        print(f"Не вдалося знайти кнопку TXT-завантаження на {link_href}: {e}")
 
-# Закриття браузера
+from extract_blocked_sites import extract_blocked_sites
+extract_blocked_sites()
+find_common_words("blocked_sait.json", "our_sites.json")
+# Читання результатів порівняння
+with open("result.json", "r", encoding="utf-8") as file:
+    data = json.load(file)
+
+# Формуємо повідомлення
+message = "\n".join(data) if data else "Немає спільних заблокованих сайтів."
+
+# Надсилаємо
+send_telegram_alert(TOKEN, CHAT_ID, message)
+
+# Закриваємо браузер
 driver.quit()
 print("Скрипт завершено!")
-
-# Обробка завантажених файлів
-all_text = []
-for filename in os.listdir(DOWNLOAD_FOLDER):
-    file_path = os.path.join(DOWNLOAD_FOLDER, filename)
-    if os.path.isfile(file_path):
-        with open(file_path, "r", encoding="utf-8") as file:
-            content = file.read()
-            words = content.split()
-            all_text.extend(words)
-
-with open(BLOCKED_SITES_FILE, "w", encoding="utf-8") as file:
-    json.dump(all_text, file, indent=4, ensure_ascii=False)
-
-# Порівняння списків blocked_sait.json та our_sites.json
-if os.path.exists(BLOCKED_SITES_FILE) and os.path.exists(OUR_SITES_FILE):
-    with open(BLOCKED_SITES_FILE, "r", encoding="utf-8") as f1, open(OUR_SITES_FILE, "r", encoding="utf-8") as f2:
-        list1 = json.load(f1)
-        list2 = json.load(f2)
-
-    common_words = list(set(list1) & set(list2))
-
-    with open(RESULT_FILE, "w", encoding="utf-8") as file:
-        json.dump(common_words, file, indent=4, ensure_ascii=False)
-
-    print("Результат збережено у result.json")
-with open(RESULT_FILE, "r", encoding="utf-8") as file:
-    list_block = json.load(file)
-
-MESSAGE = "\n".join(list_block) if list_block else "Результатів не знайдено."
-
-
-url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-params = {"chat_id": CHAT_ID, "text": MESSAGE}
-
-response = requests.get(url, params=params)
-
-if response.status_code == 200:
-    print("✅ Повідомлення надіслано!")
-else:
-    print("❌ Помилка:", response.text)
